@@ -18,6 +18,9 @@ import (
 	"github.com/spf13/cast"
 	"github.com/tendermint/tendermint/libs/log"
 	dbm "github.com/tendermint/tm-db"
+	// NOTE: wasm
+	// wasm "github.com/CosmWasm/wasmd/x/wasm"
+	// wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 )
 
 type appCreator struct {
@@ -69,6 +72,9 @@ func (ac appCreator) newApp(
 		ac.encCfg,
 		// app option
 		appOpts,
+		// wasm option..
+		nil,
+		nil,
 		// base options
 		baseapp.SetPruning(pruningOpts),
 		baseapp.SetMinGasPrices(cast.ToString(appOpts.Get(server.FlagMinGasPrices))),
@@ -115,6 +121,8 @@ func (ac appCreator) appExport(
 		cast.ToUint(appOpts.Get(server.FlagInvCheckPeriod)),
 		ac.encCfg,
 		appOpts,
+		nil,
+		nil,
 	)
 
 	if height != -1 {

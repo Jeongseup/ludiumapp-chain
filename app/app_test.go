@@ -25,6 +25,8 @@ func TestSimAppExportAndBlockedAddrs(t *testing.T) {
 		0,
 		encCfg,
 		helpers.EmptyAppOptions{},
+		nil,
+		nil,
 	)
 	// NOTE: maccPerms means moduleAccountPermissions
 	for acc := range maccPerms {

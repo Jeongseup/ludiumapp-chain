@@ -21,6 +21,9 @@ import (
 
 	"github.com/Jeongseup/ludiumapp/app"
 	"github.com/Jeongseup/ludiumapp/app/params"
+
+	// NOTE: wasm
+	wasm "github.com/CosmWasm/wasmd/x/wasm"
 )
 
 // NewRootCmd creates a new root command for simd. It is called once in the
@@ -105,6 +108,7 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
 		genutilcli.GenTxCmd(app.ModuleBasics, encodingConfig.TxConfig, banktypes.GenesisBalancesIterator{}, app.DefaultNodeHome),
 		genutilcli.ValidateGenesisCmd(app.ModuleBasics),
 		AddGenesisAccountCmd(app.DefaultNodeHome),
+		AddGenesisWasmMsgCmd(app.DefaultNodeHome),
 		tmcli.NewCompletionCmd(rootCmd, true),
 		debug.Cmd(),
 		sdkconfig.Cmd(),
@@ -126,4 +130,5 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
 
 func addModuleInitFlags(startCmd *cobra.Command) {
 	crisis.AddModuleInitFlags(startCmd)
+	wasm.AddModuleInitFlags(startCmd)
 }

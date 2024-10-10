@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	wasm "github.com/CosmWasm/wasmd/x/wasm"
 	nameservicemoduletypes "github.com/Jeongseup/ludiumapp/x/nameservice/types"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/grpc/tmservice"
@@ -212,6 +213,7 @@ func initParamsKeeper(appCodec codec.BinaryCodec, legacyAmino *codec.LegacyAmino
 	paramsKeeper.Subspace(govtypes.ModuleName).WithKeyTable(govtypes.ParamKeyTable())
 	paramsKeeper.Subspace(crisistypes.ModuleName)
 	paramsKeeper.Subspace(nameservicemoduletypes.ModuleName)
-
+	// NOTE: wasm
+	paramsKeeper.Subspace(wasm.ModuleName)
 	return paramsKeeper
 }

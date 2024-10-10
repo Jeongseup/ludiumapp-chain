@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -74,10 +75,19 @@ import (
 	upgradetypes "github.com/cosmos/cosmos-sdk/x/upgrade/types"
 
 	// new module
-
 	nameservicemodule "github.com/Jeongseup/ludiumapp/x/nameservice"
 	nameservicemodulekeeper "github.com/Jeongseup/ludiumapp/x/nameservice/keeper"
 	nameservicemoduletypes "github.com/Jeongseup/ludiumapp/x/nameservice/types"
+
+	// wasm module
+	wasm "github.com/CosmWasm/wasmd/x/wasm"
+	wasmclient "github.com/CosmWasm/wasmd/x/wasm/client"
+
+	// ibc
+	ibctransferkeeper "github.com/cosmos/ibc-go/v3/modules/apps/transfer/keeper"
+	ibctransfertypes "github.com/cosmos/ibc-go/v3/modules/apps/transfer/types"
+	ibchost "github.com/cosmos/ibc-go/v3/modules/core/24-host"
+	ibckeeper "github.com/cosmos/ibc-go/v3/modules/core/keeper"
 )
 
 // NOTE: const.go 로 이동
@@ -100,7 +110,13 @@ var (
 		mint.AppModuleBasic{},
 		distr.AppModuleBasic{},
 		gov.NewAppModuleBasic(
-			paramsclient.ProposalHandler, distrclient.ProposalHandler, upgradeclient.ProposalHandler, upgradeclient.CancelProposalHandler,
+			append(
+				wasmclient.ProposalHandlers,
+				paramsclient.ProposalHandler,
+				distrclient.ProposalHandler,
+				upgradeclient.ProposalHandler,
+				upgradeclient.CancelProposalHandler,
+			)...,
 		),
 		params.AppModuleBasic{},
 		crisis.AppModuleBasic{},
@@ -111,6 +127,7 @@ var (
 		authzmodule.AppModuleBasic{},
 		vesting.AppModuleBasic{},
 		nameservicemodule.AppModuleBasic{},
+		wasm.AppModuleBasic{},
 	)
 
 	// module account permissions
@@ -122,6 +139,7 @@ var (
 		stakingtypes.NotBondedPoolName:    {authtypes.Burner, authtypes.Staking},
 		govtypes.ModuleName:               {authtypes.Burner},
 		nameservicemoduletypes.ModuleName: {authtypes.Minter, authtypes.Burner, authtypes.Staking},
+		wasm.ModuleName:                   {authtypes.Burner},
 	}
 )
 
@@ -163,6 +181,9 @@ type LudiumApp struct {
 	EvidenceKeeper    evidencekeeper.Keeper
 	FeeGrantKeeper    feegrantkeeper.Keeper
 	NameserviceKeeper nameservicemodulekeeper.Keeper
+	WasmKeeper        wasm.Keeper
+	IBCKeeper         *ibckeeper.Keeper // IBC Keeper must be a pointer in the app, so we can SetRouter on it correctly
+	TransferKeeper    ibctransferkeeper.Keeper
 
 	// the module manager
 	mm *module.Manager
@@ -195,6 +216,10 @@ func NewLudiumApp(
 	invCheckPeriod uint,
 	encodingConfig ludiumparams.EncodingConfig,
 	appOpts servertypes.AppOptions,
+	// NOTE: wasm
+	wasmEnabledProposals []wasm.ProposalType,
+	wasmOpts []wasm.Option,
+	//
 	baseAppOptions ...func(*baseapp.BaseApp),
 ) *LudiumApp {
 
@@ -214,6 +239,8 @@ func NewLudiumApp(
 		evidencetypes.StoreKey, capabilitytypes.StoreKey,
 		authzkeeper.StoreKey,
 		nameservicemoduletypes.StoreKey,
+		// NOTE: adding a wasm module store key
+		wasm.StoreKey,
 	)
 	tkeys := sdk.NewTransientStoreKeys(paramstypes.TStoreKey)
 	// NOTE: The testingkey is just mounted for testing purposes. Actual applications should
@@ -250,7 +277,10 @@ func NewLudiumApp(
 	// their scoped modules in `NewApp` with `ScopeToModule`
 
 	// examples)
-	// scopedIBCKeeper := app.CapabilityKeeper.ScopeToModule(ibchost.ModuleName)
+	scopedIBCKeeper := app.CapabilityKeeper.ScopeToModule(ibchost.ModuleName)
+	scopedWasmKeeper := app.CapabilityKeeper.ScopeToModule(wasm.ModuleName)
+	scopedTransferKeeper := app.CapabilityKeeper.ScopeToModule(ibctransfertypes.ModuleName)
+
 	// scopedTransferKeeper := app.CapabilityKeeper.ScopeToModule(ibctransfertypes.ModuleName)
 	// scopedICAHostKeeper := app.CapabilityKeeper.ScopeToModule(icahosttypes.SubModuleName)
 
@@ -292,6 +322,16 @@ func NewLudiumApp(
 
 	app.AuthzKeeper = authzkeeper.NewKeeper(keys[authzkeeper.StoreKey], appCodec, app.BaseApp.MsgServiceRouter())
 
+	// NOTE: ibc for wasm..
+	app.IBCKeeper = ibckeeper.NewKeeper(
+		appCodec,
+		keys[ibchost.StoreKey],
+		app.GetSubspace(ibchost.ModuleName),
+		app.StakingKeeper,
+		app.UpgradeKeeper,
+		scopedIBCKeeper,
+	)
+
 	// register the proposal types
 	govRouter := govtypes.NewRouter()
 	govRouter.AddRoute(govtypes.RouterKey, govtypes.ProposalHandler).
@@ -301,6 +341,20 @@ func NewLudiumApp(
 	govKeeper := govkeeper.NewKeeper(
 		appCodec, keys[govtypes.StoreKey], app.GetSubspace(govtypes.ModuleName), app.AccountKeeper, app.BankKeeper,
 		&stakingKeeper, govRouter,
+	)
+
+	// NOTE; for wasm
+	// Create Transfer Keepers
+	app.TransferKeeper = ibctransferkeeper.NewKeeper(
+		appCodec,
+		keys[ibctransfertypes.StoreKey],
+		app.GetSubspace(ibctransfertypes.ModuleName),
+		app.IBCKeeper.ChannelKeeper,
+		app.IBCKeeper.ChannelKeeper,
+		&app.IBCKeeper.PortKeeper,
+		app.AccountKeeper,
+		app.BankKeeper,
+		scopedTransferKeeper,
 	)
 
 	app.GovKeeper = *govKeeper.SetHooks(
@@ -324,6 +378,55 @@ func NewLudiumApp(
 	)
 	// If evidence needs to be handled for the app, set routes in router here and seal
 	app.EvidenceKeeper = *evidenceKeeper
+
+	// NOTE: wasm..
+
+	wasmDir := filepath.Join(homePath, "wasm")
+	wasmConfig, err := wasm.ReadWasmConfig(appOpts)
+	if err != nil {
+		panic(fmt.Sprintf("error while reading wasm config: %s", err))
+	}
+
+	// The last arguments can contain custom message handlers, and custom query handlers,
+	// if we want to allow any custom callbacks
+	supportedFeatures := "iterator,staking,stargate"
+	app.WasmKeeper = wasm.NewKeeper(
+		appCodec,
+		keys[wasm.StoreKey],
+		app.GetSubspace(wasm.ModuleName),
+		app.AccountKeeper,
+		app.BankKeeper,
+		app.StakingKeeper,
+		app.DistrKeeper,
+		app.IBCKeeper.ChannelKeeper,
+		&app.IBCKeeper.PortKeeper,
+		scopedWasmKeeper,
+		app.TransferKeeper,
+		app.MsgServiceRouter(),
+		app.GRPCQueryRouter(),
+		wasmDir,
+		wasmConfig,
+		supportedFeatures,
+		wasmOpts...,
+	)
+
+	// appCodec,
+	// keys[wasm.StoreKey],
+	// app.GetSubspace(wasm.ModuleName),
+	// app.AccountKeeper,
+	// app.BankKeeper,
+	// app.StakingKeeper,
+	// app.DistrKeeper,
+	// app.IBCKeeper.ChannelKeeper,
+	// app.IBCKeeper.PortKeeper,
+	// scopedWasmKeeper,
+	// app.TransferKeeper,
+	// app.MsgServiceRouter(),
+	// app.GRPCQueryRouter(),
+	// wasmDir,
+	// wasmConfig,
+	// supportedFeatures,
+	// wasmOpts...,
 
 	/****  Module Options ****/
 
@@ -351,6 +454,8 @@ func NewLudiumApp(
 		slashing.NewAppModule(appCodec, app.SlashingKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper),
 		distr.NewAppModule(appCodec, app.DistrKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper),
 		staking.NewAppModule(appCodec, app.StakingKeeper, app.AccountKeeper, app.BankKeeper),
+		// NOTE: wasm
+		wasm.NewAppModule(appCodec, &app.WasmKeeper, app.StakingKeeper, app.AccountKeeper, app.BankKeeper),
 		upgrade.NewAppModule(app.UpgradeKeeper),
 		evidence.NewAppModule(app.EvidenceKeeper),
 		params.NewAppModule(app.ParamsKeeper),
@@ -370,6 +475,8 @@ func NewLudiumApp(
 		authz.ModuleName, feegrant.ModuleName,
 		paramstypes.ModuleName, vestingtypes.ModuleName,
 		nameservicemoduletypes.ModuleName,
+		// NOTE: wasm
+		wasm.ModuleName,
 	)
 	app.mm.SetOrderEndBlockers(
 		crisistypes.ModuleName, govtypes.ModuleName, stakingtypes.ModuleName,
@@ -379,6 +486,8 @@ func NewLudiumApp(
 		feegrant.ModuleName,
 		paramstypes.ModuleName, upgradetypes.ModuleName, vestingtypes.ModuleName,
 		nameservicemoduletypes.ModuleName,
+		// NOTE: wasm
+		wasm.ModuleName,
 	)
 
 	// NOTE: The genutils module must occur after staking so that pools are
@@ -393,6 +502,8 @@ func NewLudiumApp(
 		feegrant.ModuleName,
 		paramstypes.ModuleName, upgradetypes.ModuleName, vestingtypes.ModuleName,
 		nameservicemoduletypes.ModuleName,
+		// NOTE: wasm
+		wasm.ModuleName,
 	)
 
 	// Uncomment if you want to set a custom migration order here.
@@ -425,6 +536,7 @@ func NewLudiumApp(
 		authzmodule.NewAppModule(appCodec, app.AuthzKeeper, app.AccountKeeper, app.BankKeeper, app.interfaceRegistry),
 		// NOTE: 시뮬레이션 생략함.
 		// nameserviceModule,
+		// wasm..
 	)
 
 	app.sm.RegisterStoreDecoders()
